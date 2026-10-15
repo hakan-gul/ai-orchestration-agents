@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -e
+
+mode="${STUB_GEMINI:-success}"
+
+case "$mode" in
+  quota)
+    echo "You have exhausted your daily quota" >&2
+    exit 1
+    ;;
+  fail)
+    block=$(printf "STATUS: failed\nSUMMARY: stub failed\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+  badjs)
+    echo "broken(" > code.js
+    block=$(printf "STATUS: success\nSUMMARY: stub badjs\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+  outscope)
+    mkdir -p src
+    echo "in scope" > src/in.txt
+    echo "out of scope" > outside.txt
+    block=$(printf "STATUS: success\nSUMMARY: stub outscope\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+  image)
+    printf '\x89PNG\r\n\x1a\n' > icon.png
+    block=$(printf "STATUS: success\nSUMMARY: stub image\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+  *) # success
+    mkdir -p src
+    echo "in scope" > src/in.txt
+    echo "module.exports=1" > code.js
+    block=$(printf "STATUS: success\nSUMMARY: stub success\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+esac
+
+python3 -c 'import json, sys; print(json.dumps({"response": sys.argv[1]}))' "$block"
+exit 0

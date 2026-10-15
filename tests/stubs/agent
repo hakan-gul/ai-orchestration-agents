@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -e
+
+for arg in "$@"; do
+  if [ "$arg" = "--list-models" ]; then
+    echo "composer-1"
+    exit 0
+  fi
+done
+
+mode="${STUB_CURSOR:-success}"
+
+case "$mode" in
+  quota)
+    echo "You have exhausted your daily quota" >&2
+    exit 1
+    ;;
+  fail)
+    block=$(printf "STATUS: failed\nSUMMARY: stub failed\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+  badjs)
+    echo "broken(" > code.js
+    block=$(printf "STATUS: success\nSUMMARY: stub badjs\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+  outscope)
+    mkdir -p src
+    echo "in scope" > src/in.txt
+    echo "out of scope" > outside.txt
+    block=$(printf "STATUS: success\nSUMMARY: stub outscope\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+  *) # success
+    mkdir -p src
+    echo "in scope" > src/in.txt
+    echo "module.exports=1" > code.js
+    block=$(printf "STATUS: success\nSUMMARY: stub success\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+esac
+
+python3 -c 'import json, sys; print(json.dumps({"result": sys.argv[1]}))' "$block"
+exit 0
