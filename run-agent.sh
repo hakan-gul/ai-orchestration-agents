@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Run one headless sub-agent (cursor | gemini) and print a compact structured summary.
+# Run one headless sub-agent (cursor | gemini | claude) and print a compact structured summary.
 # Full output stays in the run log dir; only the summary reaches the caller.
 #
-# Usage: run-agent.sh <cursor|gemini>   (gemini = Antigravity CLI "agy" with Google account)
-#       run-agent.sh <cursor|gemini> [options] "task"      (task "-" = read stdin)
+# Usage: run-agent.sh <cursor|gemini|claude> [options] "task"      (task "-" = read stdin)
+#   gemini = Antigravity CLI "agy" (Google account) | cursor = Cursor CLI "agent" | claude = Claude Code CLI ($CLAUDE_MODEL)
 #   -C DIR          workspace (default: cwd)
 #   -m MODEL        override model
 #   -t SECONDS      timeout (default 1200; ask mode 600)
@@ -20,7 +20,7 @@
 source "$(dirname "$0")/lib.sh"
 
 BACKEND="${1:-}"; shift || true
-case "$BACKEND" in cursor|gemini) ;; *) die "backend must be cursor|gemini";; esac
+case "$BACKEND" in cursor|gemini|claude) ;; *) die "backend must be cursor|gemini|claude";; esac
 
 WD="$PWD"; MODEL=""; TMO=""; TEST=""; CTX=""; ASK=0; SHELL_OK=0; TASK=""; SCOPE=""; ISO=""
 while [ $# -gt 0 ]; do
@@ -68,6 +68,21 @@ if [ "$BACKEND" = cursor ]; then
   if [ -z "$MODEL" ]; then MODEL="$("$AGENTS_HOME/resolve-model.sh" cursor)" || die "cursor model resolve failed (logged in?)"; fi
   CMD=(agent -p --output-format json --trust --workspace "$WD" --model "$MODEL")
   if [ $ASK = 1 ]; then CMD+=(--mode ask); else CMD+=(--force); fi
+elif [ "$BACKEND" = claude ]; then
+  # Claude Code CLI (subscription login). Prompt goes in on stdin (--allowedTools is variadic).
+  command -v claude >/dev/null || die "claude CLI not installed (run doctor.sh)"
+  MODEL="${MODEL:-${CLAUDE_MODEL:-sonnet}}"
+  # drop the parent Claude Code session's env (nested-session guard, bridge sockets); keep auth/config vars
+  CLENV=(env)
+  for _v in $(compgen -e | grep -E '^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|AI_AGENT|CLAUDE_CODE_(ENTRYPOINT|EXECPATH|SESSION_[A-Z_]*|CHILD_SESSION|MESSAGING_[A-Z_]*|BRIDGE_[A-Z_]*|ENVIRONMENT_KIND|WORKER_EPOCH))$'); do
+    CLENV+=(-u "$_v"); done
+  CLENV+=(AI_AGENTS_SUBAGENT=1)
+  CMD=("${CLENV[@]}" claude -p --output-format json --no-session-persistence --model "$MODEL"
+       --append-system-prompt "You are a SUB-AGENT started by the ai-agents wrapper, not the orchestrator. Ignore any CLAUDE.md, memory or rule that tells you to delegate, orchestrate, or call delegate.sh / ask.sh / other agents: do the work yourself. Write your final report block in English.")
+  # root cannot use bypassPermissions: accept file edits, pre-allow tools explicitly
+  if [ $ASK = 1 ]; then CMD+=(--permission-mode dontAsk --allowedTools "Read Grep Glob")
+  else CMD+=(--permission-mode acceptEdits --allowedTools "Read Edit Write Glob Grep Bash"
+             --disallowedTools "Bash(git push:*) Bash(rsync:*) Bash(systemctl:*) Bash(pm2:*) Bash(service:*)"); fi
 else
   # Gemini via Antigravity CLI (Google account). Legacy gemini CLI only if GEMINI_CLI=gemini.
   MODEL="${MODEL:-$GEMINI_MODEL}"
@@ -96,6 +111,8 @@ touch "$RD/.start"; START=$(date +%s)
 # Run in the background so watchdog.sh can kill servers the agent started in the foreground (they block it forever).
 if [ "$BACKEND" = cursor ]; then
   (cd "$WD" && exec timeout "$TMO" "${CMD[@]}" "$PROMPT") >"$RD/raw.json" 2>"$RD/stderr.log" </dev/null &
+elif [ "$BACKEND" = claude ]; then
+  (cd "$WD" && exec timeout "$TMO" "${CMD[@]}") >"$RD/raw.json" 2>"$RD/stderr.log" <"$RD/prompt.txt" &
 else
   (cd "$WD" && exec timeout "$TMO" "${CMD[@]}" -p "$PROMPT") >"$RD/raw.json" 2>"$RD/stderr.log" </dev/null &
 fi
@@ -129,8 +146,9 @@ if [ "$INFRA" = quota ]; then
   if echo "$T" | grep -q 'exhausted your daily quota'; then QUOTA="daily quota exhausted"; CD=360
   elif echo "$T" | grep -qE 'status: 503|high demand'; then QUOTA="model overloaded (503)"; CD=15
   else QUOTA="rate/usage limit"; CD=10; fi
-  # gemini cooldown so delegate.sh / ask.sh skip gemini for a while
-  [ "$BACKEND" = gemini ] && echo "$(( $(date +%s) + CD*60 )) $QUOTA" > "$STATE_DIR/gemini-cooldown"
+  [ "$BACKEND" = claude ] && [ "$QUOTA" = "rate/usage limit" ] && CD=60   # Claude subscription limits reset in hours
+  # cooldown so delegate.sh / ask.sh skip this backend for a while
+  case "$BACKEND" in gemini|claude) echo "$(( $(date +%s) + CD*60 )) $QUOTA" > "$STATE_DIR/$BACKEND-cooldown";; esac
 fi
 
 # ---- ask mode: just return a capped answer ----

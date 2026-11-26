@@ -13,7 +13,7 @@ User
 Orchestrator (expensive model: selected model in Cursor / Claude Code)
    │  plan + task contract (Objective / Scope / Acceptance …)
    ▼
-delegate.sh ──► Gemini (agy, subscription quota) ──failure/quota──► Composer (Cursor CLI) ──► ESCALATE (orchestrator takes over)
+delegate.sh ──► Gemini (agy, subscription quota) ──failure/quota──► fallback: Sonnet (Claude Code CLI) or Composer (Cursor CLI) ──► ESCALATE (orchestrator takes over)
    │                 │                                                    │
    │                 └──────────── run-agent.sh: snapshot → agent → snapshot → --test → --scope check → summary
    ▼
@@ -25,7 +25,10 @@ Orchestrator review: APPROVED  |  CHANGES REQUIRED → returned via same path wi
 
 - **The orchestrator model** handles architecture, task definitions, code review, and final decisions; it does not write code directly (except 1–2 line fixes).
 - **Gemini** (Antigravity CLI `agy`, your Google account / Gemini subscription quota) is the primary choice at every level: the most cost-effective path via subscription quota. It is also the only sub-agent capable of generating images.
-- **Composer** (Cursor CLI `agent`) takes over when Gemini quota is exhausted, on login/CLI failures, or when Gemini fails the task.
+- **The fallback backend** takes over when Gemini quota is exhausted, on login/CLI failures, or when Gemini fails the task. Choose it with `FALLBACK_BACKEND` in `~/.config/ai-agents/env`:
+  - `claude` — Claude Code CLI (`claude -p`, model `$CLAUDE_MODEL`, default `sonnet`), using your Claude subscription login. The sub-agent runs with `acceptEdits` + pre-allowed tools (works as root), gets `AI_AGENTS_SUBAGENT=1` and a system prompt that forbids re-delegating, and `delegate.sh`/`ask.sh` refuse to run inside it.
+  - `cursor` — Cursor Composer (`agent` CLI). Default, for backward compatibility.
+  - `none` — Gemini → Gemini retry → ESCALATE (`DISABLE_CURSOR=1` with the cursor fallback means the same).
 - **Wrappers** (bash + python3) run sub-agents headless, track changes, run tests independently, categorize outcomes, and report a concise summary back to the orchestrator model. Raw logs remain on disk and never pollute the expensive orchestrator's context window.
 
 ### Why this architecture (design decisions)
@@ -166,7 +169,13 @@ curl https://cursor.com/install -fsS | bash
 NO_OPEN_BROWSER=1 agent login     # open the printed link in your browser (or: wslview <link>)
 agent --list-models | grep -i composer
 ```
-Both CLIs are installed into `~/.local/bin`; the wrappers automatically add this directory to PATH. On Windows/WSL, logging into the Cursor desktop application on the Windows side does not authenticate the WSL `agent` CLI; you must log in via the CLI directly.
+**Or** the Claude Code CLI as the fallback (`FALLBACK_BACKEND=claude`):
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+claude          # once interactively -> /login with your Claude account -> exit
+```
+
+The CLIs are installed into `~/.local/bin`; the wrappers automatically add this directory to PATH. On Windows/WSL, logging into the Cursor desktop application on the Windows side does not authenticate the WSL `agent` CLI; you must log in via the CLI directly.
 
 ### 3.5 install.sh
 
@@ -248,11 +257,12 @@ Then in Cursor (with the project opened in WSL mode), give the agent a regular t
 
 Execution flow details:
 - Gemini succeeds → finished.
-- Gemini returns `quota` / `auth_failure` / `cli_failure` → falls back to Composer, followed by a Composer retry (both receiving the prior report).
+("Composer" below = the configured fallback backend: Sonnet via `claude` or Composer via `cursor`.)
+- Gemini returns `quota` / `auth_failure` / `cli_failure` → falls back to Composer, followed by a Composer retry (both receiving the prior report). If the fallback itself reports `quota`, it escalates at once and a cooldown is written (`claude`: 60 min).
 - Gemini standard failure (`test_failure`, `agent_failure`, `scope_violation`, etc.) → falls back to Composer, passing the previous report and **full error digest**.
 - If Gemini is in cooldown (written when quota is exhausted: 6 hours for daily quota, 10 minutes for 429 rate limit, 15 minutes for 503 service unavailable), execution bypasses Gemini and goes directly to Composer.
 - `image`: on cooldown or when Gemini is unreachable, immediately triggers ESCALATE (Composer cannot generate images).
-- `--backend cursor`: bypasses Gemini and invokes Composer directly.
+- `--backend claude` / `--backend cursor`: bypasses Gemini and starts on that backend (`cursor` maps to the fallback when `DISABLE_CURSOR=1`).
 
 ### 4.2 Commands
 
@@ -358,6 +368,9 @@ Configured via `~/.config/ai-agents/env` (generated from template during install
 | `GEMINI_MODEL_NORMAL` / `_COMPLEX` | `gemini-3.8-flash-high` | |
 | `GEMINI_MODEL_IMAGE` | `gemini-3.8-flash-medium` | Chat model orchestrating the image generation tool |
 | `GEMINI_MODEL` | `gemini-3.8-flash-medium` | Used by `ask.sh` / `gemini.sh` |
+| `FALLBACK_BACKEND` | `cursor` | `claude` (Claude Code CLI) \| `cursor` (Composer) \| `none` |
+| `CLAUDE_MODEL` | `sonnet` | `sonnet` / `opus` / `haiku` / full model id |
+| `DISABLE_CURSOR` | `0` | `1` = never use Cursor (a `cursor` fallback becomes `none`) |
 | `CURSOR_MODEL` | empty = latest `composer*` | |
 | `GEMINI_CLI` | `agy` | `gemini` = legacy Gemini CLI + API key |
 | `IMPECCABLE_BIN` | auto | |

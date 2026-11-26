@@ -7,3 +7,7 @@
 : "${GEMINI_MODEL_COMPLEX:=gemini-3.8-flash-high}"
 : "${GEMINI_MODEL_IMAGE:=gemini-3.8-flash-medium}"    # image tool is the same; the chat model only drives it
 : "${CURSOR_MODEL:=}"      # empty = auto-detect newest "composer*" model
+# Fallback when Gemini is out of quota / fails: cursor (Composer) | claude (Claude Code CLI) | none
+# DISABLE_CURSOR=1 (legacy) turns a "cursor" fallback into "none".
+: "${FALLBACK_BACKEND:=cursor}"
+: "${CLAUDE_MODEL:=sonnet}"   # claude backend model: sonnet | opus | haiku | full model id

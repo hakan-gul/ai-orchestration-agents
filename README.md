@@ -3,7 +3,7 @@
 Cost-aware multi-agent coding from the terminal. An expensive **orchestrator** model (the agent in Cursor, Claude Code, …) plans, writes the task contract and reviews. Cheap **sub-agents** do the implementation:
 
 ```
-orchestrator ──► delegate.sh ──► Gemini (Antigravity CLI `agy`) ──fails / out of quota──► Cursor Composer (`agent` CLI) ──► ESCALATE
+orchestrator ──► delegate.sh ──► Gemini (Antigravity CLI `agy`) ──fails / out of quota──► fallback: Sonnet (`claude` CLI) | Composer (`agent` CLI) ──► ESCALATE
                                      │
                                      └─ run-agent.sh: snapshot → agent → snapshot → your test → scope check → ~15-line summary
 ```
@@ -27,8 +27,8 @@ UNRESOLVED: none
 
 ## Features
 
-- **Gemini first, Composer as fallback.** Every level (`simple`, `normal`, `complex`) starts on Gemini. On quota, auth or CLI errors the task moves to Cursor Composer, and a cooldown is recorded so later tasks skip Gemini for a while. A normal failure is retried on Composer together with the full failure report.
-- **Image generation.** The `image` level uses Gemini's image tool. It has no Composer fallback, because Composer can't generate images.
+- **Gemini first, then a fallback of your choice.** Every level (`simple`, `normal`, `complex`) starts on Gemini. On quota, auth or CLI errors the task moves to the fallback backend — Claude Code CLI with Sonnet (`FALLBACK_BACKEND=claude`) or Cursor Composer (`cursor`, default) — and a cooldown is recorded so later tasks skip Gemini for a while. A normal failure is retried on the fallback together with the full failure report. `none` keeps everything on Gemini.
+- **Image generation.** The `image` level uses Gemini's image tool. It has no fallback, because the other CLIs can't generate images.
 - **The wrapper runs your tests, not the agent.** With `--test "<cmd>"`, a failed test sets `OUTCOME: test_failure` and puts every error line in the summary. Logs up to 60 lines are included in full; longer logs are reduced to their error blocks with per-file counts. A passing test shows its counts and flags `NO TESTS RAN`.
 - **Outcome taxonomy.** `success`, `partial`, `agent_failure`, `test_failure`, `scope_violation`, `timeout`, `quota`, `auth_failure`, `cli_failure`.
 - **Scope guard.** With `--scope "src/cart/, tests/*.ts"`, any change outside those paths is reported as `scope_violation`, and the next attempt reverts it first.
@@ -42,18 +42,20 @@ UNRESOLVED: none
 - Linux, macOS (with Homebrew GNU tools) or Windows via **WSL2**
 - bash ≥ 4, git, python3, rsync, flock
 - [Antigravity CLI](https://antigravity.google) (`agy`), logged in with a Google account
-- [Cursor CLI](https://cursor.com/cli) (`agent`), logged in with a Cursor account
+- One fallback (optional): [Claude Code](https://claude.com/claude-code) (`claude`, logged in with a Claude account) or [Cursor CLI](https://cursor.com/cli) (`agent`, Cursor account)
 
 ## Quick start
+
+Setting up a new machine with an AI agent? Point it at **[SETUP.md](SETUP.md)** — step-by-step instructions written for agents.
 
 ```bash
 git clone https://github.com/hakan-gul/ai-orchestration-agents ~/ai-agents-src
 cd ~/ai-agents-src
-./install.sh --project ~/code/my-app --cursor --agy-perms ~/code   # installs to ~/.ai-agents
+./install.sh --fallback claude --claude-global --agy-perms ~/code   # installs to ~/.ai-agents
 ~/.ai-agents/doctor.sh && bash ~/.ai-agents/tests/run.sh
 ```
 
-`--cursor` writes `.cursor/rules/ai-orchestration.mdc` (always applied) into the project, so the Cursor agent starts orchestrating. Use `--claude` / `--claude-global` for Claude Code instead.
+`--claude-global` adds the orchestration rules to `~/.claude/CLAUDE.md`, so every Claude Code session orchestrates. `--project DIR --cursor` writes `.cursor/rules/ai-orchestration.mdc` for Cursor instead. `--fallback claude|cursor|none` writes `FALLBACK_BACKEND` to `~/.config/ai-agents/env`.
 
 ## Usage
 

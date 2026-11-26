@@ -17,8 +17,12 @@ mkdir -p "$HOME"
 mkdir -p "$AI_AGENTS_STATE" "$AI_AGENTS_STUB_BIN"
 cp "$D/tests/stubs/agy" "$AI_AGENTS_STUB_BIN/agy"
 cp "$D/tests/stubs/agent" "$AI_AGENTS_STUB_BIN/agent"
-chmod +x "$AI_AGENTS_STUB_BIN/agy" "$AI_AGENTS_STUB_BIN/agent"
-chmod +x "$D/tests/stubs/agy" "$D/tests/stubs/agent" 2>/dev/null || true
+cp "$D/tests/stubs/claude" "$AI_AGENTS_STUB_BIN/claude"
+chmod +x "$AI_AGENTS_STUB_BIN/agy" "$AI_AGENTS_STUB_BIN/agent" "$AI_AGENTS_STUB_BIN/claude"
+chmod +x "$D/tests/stubs/agy" "$D/tests/stubs/agent" "$D/tests/stubs/claude" 2>/dev/null || true
+# a parent Claude Code session must not leak into claude sub-agents
+export CLAUDECODE=1
+unset FALLBACK_BACKEND DISABLE_CURSOR AI_AGENTS_SUBAGENT
 
 export PATH="$AI_AGENTS_STUB_BIN:$PATH"
 
@@ -287,7 +291,7 @@ test_12() {
   rc=$?
   [ $rc -eq 3 ] || { echo "delegate exited $rc, expected 3 (output: $out)"; return 1; }
   echo "$out" | grep -q "] cursor ===" && { echo "cursor was called although disabled: $out"; return 1; }
-  echo "$out" | grep -q "Cursor is disabled" || { echo "escalation reason missing: $out"; return 1; }
+  echo "$out" | grep -q "no fallback backend" || { echo "escalation reason missing: $out"; return 1; }
   return 0
 }
 
@@ -300,6 +304,55 @@ test_13() {
   out="$(DISABLE_CURSOR=1 STUB_GEMINI=fail STUB_CURSOR=success "$D/delegate.sh" simple -C "$ws" "task 13" 2>&1)"
   echo "$out" | grep -q "simple retry\] gemini ===" || { echo "gemini retry header missing: $out"; return 1; }
   echo "$out" | grep -q "] cursor ===" && { echo "cursor was called although disabled: $out"; return 1; }
+  return 0
+}
+
+# 14 FALLBACK_BACKEND=claude: gemini quota -> claude, cursor never called
+test_14() {
+  local ws="$TMPDIR/ws14"; mkdir -p "$ws"
+  rm -f "$AI_AGENTS_STATE/gemini-cooldown" "$AI_AGENTS_STATE/claude-cooldown"
+  local out rc
+  out="$(FALLBACK_BACKEND=claude STUB_GEMINI=quota STUB_CLAUDE=success STUB_CURSOR=quota "$D/delegate.sh" simple -C "$ws" "task 14" 2>&1)"
+  rc=$?
+  [ $rc -eq 0 ] || { echo "delegate exited $rc, expected 0 (output: $out)"; return 1; }
+  echo "$out" | grep -qE "=== \[[0-9]+: simple via claude\] claude ===" || { echo "claude attempt header missing: $out"; return 1; }
+  echo "$out" | grep -q "stub claude success" || { echo "claude summary missing: $out"; return 1; }
+  echo "$out" | grep -q "cursor ===" && { echo "cursor was called: $out"; return 1; }
+  return 0
+}
+
+# 15 claude fallback out of quota -> escalate at once (no retry), claude cooldown written
+test_15() {
+  local ws="$TMPDIR/ws15"; mkdir -p "$ws"
+  rm -f "$AI_AGENTS_STATE/gemini-cooldown" "$AI_AGENTS_STATE/claude-cooldown"
+  local out rc
+  out="$(FALLBACK_BACKEND=claude STUB_GEMINI=quota STUB_CLAUDE=quota "$D/delegate.sh" simple -C "$ws" "task 15" 2>&1)"
+  rc=$?
+  [ $rc -eq 3 ] || { echo "delegate exited $rc, expected 3 (output: $out)"; return 1; }
+  echo "$out" | grep -q "claude retry" && { echo "claude retried despite quota: $out"; return 1; }
+  [ -f "$AI_AGENTS_STATE/claude-cooldown" ] || { echo "state/claude-cooldown missing"; return 1; }
+  return 0
+}
+
+# 16 DISABLE_CURSOR=1 + FALLBACK_BACKEND=claude: gemini failure -> claude with context; --backend cursor -> claude
+test_16() {
+  local ws="$TMPDIR/ws16"; mkdir -p "$ws"
+  rm -f "$AI_AGENTS_STATE/gemini-cooldown" "$AI_AGENTS_STATE/claude-cooldown"
+  local out rc
+  out="$(DISABLE_CURSOR=1 FALLBACK_BACKEND=claude STUB_GEMINI=fail STUB_CLAUDE=success "$D/delegate.sh" normal -C "$ws" "task 16" 2>&1)"
+  rc=$?
+  [ $rc -eq 0 ] || { echo "delegate exited $rc, expected 0 (output: $out)"; return 1; }
+  echo "$out" | grep -qE "escalated to claude\] claude ===" || { echo "claude escalation header missing: $out"; return 1; }
+  out="$(DISABLE_CURSOR=1 FALLBACK_BACKEND=claude STUB_CLAUDE=success "$D/delegate.sh" simple --backend cursor -C "$ws" "task 16b" 2>&1)"
+  echo "$out" | grep -qE "via claude\] claude ===" || { echo "--backend cursor did not map to claude: $out"; return 1; }
+  return 0
+}
+
+# 17 sub-agents cannot orchestrate
+test_17() {
+  local out rc
+  out="$(AI_AGENTS_SUBAGENT=1 "$D/delegate.sh" simple -C "$TMPDIR" "task 17" 2>&1)"; rc=$?
+  [ $rc -eq 2 ] || { echo "nested delegate exited $rc, expected 2: $out"; return 1; }
   return 0
 }
 
@@ -316,6 +369,10 @@ run_test "10 testdigest.py" test_10
 run_test "11 lib.sh scope_violations" test_11
 run_test "12 DISABLE_CURSOR quota escalates" test_12
 run_test "13 DISABLE_CURSOR gemini retry" test_13
+run_test "14 claude fallback on gemini quota" test_14
+run_test "15 claude quota escalates" test_15
+run_test "16 claude fallback on failure / --backend cursor" test_16
+run_test "17 no nested orchestration" test_17
 
 echo "$PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ] || exit 1

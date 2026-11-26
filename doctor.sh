@@ -21,6 +21,7 @@ deps() {
 }
 if [ "${1:-}" = --deps ]; then deps; exit $?; fi
 deps || ok=0
+if [ "$FB" = cursor ]; then
 if command -v agent >/dev/null; then
   echo "cursor: installed $(agent --version 2>/dev/null)"
   if agent status 2>&1 | grep -qi 'not logged in' && [ -z "$CURSOR_API_KEY" ]; then
@@ -29,6 +30,15 @@ if command -v agent >/dev/null; then
     M="$("$AGENTS_HOME/resolve-model.sh" cursor)" && echo "cursor: auth ok, model=$M" || { echo "cursor: auth ok? but no composer model found"; ok=0; }
   fi
 else echo "cursor: MISSING -> curl https://cursor.com/install -fsS | bash"; ok=0; fi
+fi
+
+if [ "$FB" = claude ]; then
+  if command -v claude >/dev/null; then
+    echo "claude: installed $(claude --version 2>/dev/null), model=$CLAUDE_MODEL"
+    R="$(cd /tmp && echo 'Reply with exactly: pong' | timeout 120 "$AGENTS_HOME/run-agent.sh" claude --ask - 2>&1)"
+    echo "$R" | grep -qi pong && echo "claude: auth ok" || { echo "claude: call failed -> run 'claude' once interactively and /login: $(echo "$R" | tail -c 250 | tr '\n' ' ')"; ok=0; }
+  else echo "claude: MISSING -> curl -fsSL https://claude.ai/install.sh | bash   (then: claude, /login)"; ok=0; fi
+fi
 
 if [ "$GEMINI_CLI" = agy ]; then
   if command -v agy >/dev/null; then
@@ -40,8 +50,10 @@ else
   command -v gemini >/dev/null && echo "gemini(legacy cli): installed" || { echo "gemini: MISSING"; ok=0; }
 fi
 CDF="$STATE_DIR/gemini-cooldown"
-[ -f "$CDF" ] && [ "$(cut -d' ' -f1 "$CDF")" -gt "$(date +%s)" ] && echo "gemini: COOLDOWN until $(date -d @"$(cut -d' ' -f1 "$CDF")" +%H:%M) ($(cut -d' ' -f2- "$CDF")) -> code tasks go to cursor, image tasks escalate"
-echo "routing: simple=$GEMINI_MODEL_SIMPLE normal=$GEMINI_MODEL_NORMAL complex=$GEMINI_MODEL_COMPLEX image=$GEMINI_MODEL_IMAGE (gemini first, cursor fallback)"
+[ -f "$CDF" ] && [ "$(cut -d' ' -f1 "$CDF")" -gt "$(date +%s)" ] && echo "gemini: COOLDOWN until $(date -d @"$(cut -d' ' -f1 "$CDF")" +%H:%M) ($(cut -d' ' -f2- "$CDF")) -> code tasks go to $FB, image tasks escalate"
+echo "routing: simple=$GEMINI_MODEL_SIMPLE normal=$GEMINI_MODEL_NORMAL complex=$GEMINI_MODEL_COMPLEX image=$GEMINI_MODEL_IMAGE (gemini first, fallback: $FB)"
+CCF="$STATE_DIR/claude-cooldown"
+[ -f "$CCF" ] && [ "$(cut -d' ' -f1 "$CCF")" -gt "$(date +%s)" ] && echo "claude: COOLDOWN until $(date -d @"$(cut -d' ' -f1 "$CCF")" +%H:%M) ($(cut -d' ' -f2- "$CCF"))"
 NWT=$(ls "$STATE_DIR"/worktrees/*.meta 2>/dev/null | wc -l)
 [ "$NWT" -gt 0 ] && echo "worktrees: $NWT open (scripts/agents/wt.sh list) — apply or discard finished ones"
 [ $ok = 1 ] && echo "doctor: ALL OK" || { echo "doctor: PROBLEMS FOUND"; exit 1; }

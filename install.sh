@@ -2,7 +2,7 @@
 # Install the ai-agents orchestration wrappers and wire them into Cursor / Claude Code.
 #
 #   ./install.sh [--prefix DIR] [--project DIR]... [--cursor] [--claude] [--claude-global]
-#                [--agy-perms PROJECTS_DIR] [--dry-run]
+#                [--agy-perms PROJECTS_DIR] [--fallback claude|cursor|none] [--dry-run]
 #
 #   --prefix DIR        where the wrappers live (default: ~/.ai-agents)
 #   --project DIR       a project to wire up (repeatable); needs --cursor and/or --claude
@@ -11,13 +11,15 @@
 #   --claude-global     add/refresh the block in ~/.claude/CLAUDE.md (all Claude Code projects)
 #   --agy-perms DIR     give agy (Gemini) the command allow/deny list, with file access to DIR
 #                       (only if ~/.gemini/antigravity-cli/settings.json has no "permissions" yet)
+#   --fallback B        set FALLBACK_BACKEND=B in ~/.config/ai-agents/env (backend used when Gemini is
+#                       out of quota / fails: claude = Claude Code CLI, cursor = Composer, none)
 #   --dry-run           print what would change, change nothing
 #
 # Re-running is safe: files are refreshed, user text outside the marked blocks is never touched,
 # a pre-existing non-generated .mdc is backed up (*.bak) before being replaced.
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
-PREFIX="$HOME/.ai-agents"; PROJECTS=(); CURSOR=0; CLAUDE=0; CLAUDE_GLOBAL=0; AGY_DIR=""; DRY=0
+PREFIX="$HOME/.ai-agents"; PROJECTS=(); CURSOR=0; CLAUDE=0; CLAUDE_GLOBAL=0; AGY_DIR=""; DRY=0; FALLBACK=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --prefix) PREFIX="$2"; shift 2;;
@@ -26,11 +28,13 @@ while [ $# -gt 0 ]; do
     --claude) CLAUDE=1; shift;;
     --claude-global) CLAUDE_GLOBAL=1; shift;;
     --agy-perms) AGY_DIR="$2"; shift 2;;
+    --fallback) FALLBACK="$2"; shift 2;;
     --dry-run) DRY=1; shift;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0;;
+    -h|--help) awk 'NR>1 && /^#/{print; next} NR>1{exit}' "$0"; exit 0;;
     *) echo "unknown option: $1" >&2; exit 2;;
   esac
 done
+case "$FALLBACK" in ""|claude|cursor|none) ;; *) echo "--fallback must be claude|cursor|none" >&2; exit 2;; esac
 [ ${#PROJECTS[@]} -gt 0 ] && [ $CURSOR = 0 ] && [ $CLAUDE = 0 ] && { echo "--project needs --cursor and/or --claude" >&2; exit 2; }
 
 say() { echo "• $*"; }
@@ -60,6 +64,13 @@ run chmod +x "$PREFIX"/*.sh "$PREFIX"/testdigest.py "$PREFIX"/tests/run.sh "$PRE
 ENVF="$HOME/.config/ai-agents/env"
 if [ -f "$ENVF" ]; then say "keep existing $ENVF"
 else say "create $ENVF"; run mkdir -p "$(dirname "$ENVF")"; run cp "$SRC/templates/env.example" "$ENVF"; fi
+if [ -n "$FALLBACK" ]; then
+  say "FALLBACK_BACKEND=$FALLBACK -> $ENVF"
+  if [ $DRY = 0 ]; then
+    if grep -qE '^#?FALLBACK_BACKEND=' "$ENVF"; then sed -i -E "s/^#?FALLBACK_BACKEND=.*/FALLBACK_BACKEND=$FALLBACK/" "$ENVF"
+    else echo "FALLBACK_BACKEND=$FALLBACK" >> "$ENVF"; fi
+  fi
+fi
 
 # 3. agy permissions
 if [ -n "$AGY_DIR" ]; then
@@ -123,7 +134,7 @@ if [ $DRY = 0 ]; then "$PREFIX/doctor.sh" --deps || true; fi
 cat <<EOF
 
 Next:
-  1. Log in once (interactive):  agy        (Google account)   |   agent login   (Cursor account)
+  1. Log in once (interactive):  agy  (Google account)  |  fallback: claude -> /login  (Claude)  or  agent login  (Cursor)
   2. Full check:                 $PREFIX/doctor.sh
   3. Self-test (no network):     bash $PREFIX/tests/run.sh
   4. Cursor global rule (optional): Cursor Settings → Rules → User Rules → paste the output of:

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -e
+cat >/dev/null   # prompt arrives on stdin
+[ "${AI_AGENTS_SUBAGENT:-}" = 1 ] || { echo "AI_AGENTS_SUBAGENT not set" >&2; exit 1; }
+[ -z "${CLAUDECODE:-}" ] || { echo "parent CLAUDECODE leaked" >&2; exit 1; }
+
+mode="${STUB_CLAUDE:-success}"
+
+case "$mode" in
+  quota)
+    python3 -c 'import json; print(json.dumps({"is_error": True, "result": "Claude AI usage limit reached|1900000000"}))'
+    exit 1
+    ;;
+  fail)
+    block=$(printf "STATUS: failed\nSUMMARY: stub failed\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+  *) # success
+    mkdir -p src
+    echo "in scope" > src/in.txt
+    echo "module.exports=1" > code.js
+    block=$(printf "STATUS: success\nSUMMARY: stub claude success\nTESTS: not run\nUNRESOLVED: none")
+    ;;
+esac
+
+python3 -c 'import json, sys; print(json.dumps({"is_error": False, "result": sys.argv[1]}))' "$block"
+exit 0

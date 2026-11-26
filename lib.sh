@@ -22,6 +22,15 @@ fi
 
 die() { echo "ERROR: $*" >&2; exit 2; }
 
+# Fallback backend after Gemini: cursor | claude | none
+FB="${FALLBACK_BACKEND:-cursor}"
+[ "$FB" = cursor ] && [ "${DISABLE_CURSOR:-0}" = 1 ] && FB=none
+case "$FB" in cursor|claude|none) ;; *) echo "WARN: FALLBACK_BACKEND=$FB unknown, using none" >&2; FB=none;; esac
+
+# Sub-agents must never orchestrate (a claude sub-agent reads the same CLAUDE.md that tells it to delegate)
+no_nested() { [ "${AI_AGENTS_SUBAGENT:-0}" = 1 ] || return 0
+  echo "ERROR: you are a sub-agent started by the ai-agents wrapper — do the task yourself, do not call delegate.sh/ask.sh." >&2; exit 2; }
+
 new_run_id() { echo "$(date +%Y%m%d-%H%M%S)-$1-$(head -c3 /dev/urandom | od -An -tx1 | tr -d ' \n')"; }
 
 # impeccable design detector (optional): first one found, or $IMPECCABLE_BIN
@@ -100,7 +109,7 @@ if data is None:
         except Exception: continue
 if not isinstance(data, dict):
     print(raw[-1500:]); sys.exit(0)
-if backend == "cursor":
+if backend in ("cursor", "claude"):
     txt = data.get("result") or ""
     if data.get("is_error"): txt = "STATUS: failed\nSUMMARY: agent error: " + str(txt)[:500]
 else:
@@ -149,7 +158,7 @@ for f in sys.stdin.read().splitlines():
 # Classify a non-zero agent exit from its logs: quota | auth | "" (unknown)   $1=backend $2=stderr $3=raw
 infra_reason() {
   local t; t="$(cat "$2" "$3" 2>/dev/null | tail -c 20000)"
-  if echo "$t" | grep -qiE 'exhausted your daily quota|exceeded your current quota|RESOURCE_EXHAUSTED|status: 429|rate.?limit|usage limit|out of (credits|requests)|quota (exceeded|reached)|hit your (usage|limit)|status: 503|high demand'; then echo quota
+  if echo "$t" | grep -qiE 'exhausted your daily quota|exceeded your current quota|RESOURCE_EXHAUSTED|status: 429|rate.?limit|usage limit|out of (credits|requests)|quota (exceeded|reached)|hit your (usage|limit)|limit reached|overloaded_error|status: 503|high demand'; then echo quota
   elif echo "$t" | grep -qiE 'not logged in|log ?in required|please (log|sign) ?in|unauthenticated|authentication (failed|required)|invalid (api key|credentials)|status: 401|IneligibleTier'; then echo auth
   fi
 }

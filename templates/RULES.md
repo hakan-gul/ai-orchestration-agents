@@ -3,20 +3,20 @@
 You (the expensive model in this session: the model selected in Cursor or Claude Code) are the **orchestrator / lead developer**. The objective is to minimize expensive model tokens while maintaining high code quality.
 Delegate implementation tasks to cheap sub-agents; reserve yourself strictly for architecture, planning, complex failure analysis, delegation, and final review.
 
-Wrappers: `{{AGENTS_HOME}}`. Sub-agents: **Gemini** = Antigravity CLI `agy` (Google account) and **Composer** = Cursor CLI `agent` (Cursor account). No API keys needed.
+Wrappers: `{{AGENTS_HOME}}`. Sub-agents: **Gemini** = Antigravity CLI `agy` (Google account), then the **fallback** set by `FALLBACK_BACKEND` in `~/.config/ai-agents/env`: **Sonnet** = Claude Code CLI `claude` (Claude subscription, `claude`) or **Composer** = Cursor CLI `agent` (`cursor`). No API keys needed. `{{AGENTS_HOME}}/doctor.sh` prints the active routing.
 
 ## Routing
 
 | Task | Command | Model |
 |---|---|---|
-| Simple: boilerplate, writing tests, CSS, small TS/PHP fixes, text/translations | `{{AGENTS_HOME}}/delegate.sh simple` | Gemini Flash-medium → Composer |
-| Normal coding, refactor, multi-file changes, test/fix cycles | `{{AGENTS_HOME}}/delegate.sh normal` | Gemini Flash-high → Composer |
-| Complex implementation (once the plan is clear) | `{{AGENTS_HOME}}/delegate.sh complex` | Gemini Flash-high, plan-first → Composer |
-| Image generation (icons, illustrations, hero/OG images) | `{{AGENTS_HOME}}/delegate.sh image` | **Gemini only** (Composer cannot generate images) → retry → ESCALATE |
-| Codebase search / "where is X, how does it work" | `{{AGENTS_HOME}}/ask.sh -C <dir> "<question>"` | Gemini Flash (read-only) → Composer |
+| Simple: boilerplate, writing tests, CSS, small TS/PHP fixes, text/translations | `{{AGENTS_HOME}}/delegate.sh simple` | Gemini Flash-medium → fallback |
+| Normal coding, refactor, multi-file changes, test/fix cycles | `{{AGENTS_HOME}}/delegate.sh normal` | Gemini Flash-high → fallback |
+| Complex implementation (once the plan is clear) | `{{AGENTS_HOME}}/delegate.sh complex` | Gemini Flash-high, plan-first → fallback |
+| Image generation (icons, illustrations, hero/OG images) | `{{AGENTS_HOME}}/delegate.sh image` | **Gemini only** (no other image tool) → retry → ESCALATE |
+| Codebase search / "where is X, how does it work" | `{{AGENTS_HOME}}/ask.sh -C <dir> "<question>"` | Gemini Flash (read-only) → fallback |
 | Architecture, ambiguous requirements, security, data loss risk, UI/visual design, tasks failing sub-agents twice | You | — |
 
-**Gemini first:** Every tier tries Gemini first. When Gemini quota is exhausted (`OUTCOME: quota` → cooldown file) or on auth/CLI errors, tasks automatically fall back to Composer (Composer + 1 retry). When Gemini fails normally, the second attempt uses Composer (with failure context). For tasks known to perform poorly with Gemini, use `--backend cursor`.
+**Gemini first:** Every tier tries Gemini first. When Gemini quota is exhausted (`OUTCOME: quota` → cooldown file) or on auth/CLI errors, tasks automatically go to the fallback backend (fallback + 1 retry; a fallback that is itself out of quota escalates at once). When Gemini fails normally, the second attempt uses the fallback (with failure context). With `FALLBACK_BACKEND=none` it is Gemini → Gemini retry → ESCALATE. For tasks known to perform poorly with Gemini, start on the fallback directly: `--backend claude` / `--backend cursor`.
 
 Command syntax: `{{AGENTS_HOME}}/delegate.sh normal -C <project-dir> --test "<verification>" [--scope "src/x/, tests/"] [--isolate NAME] "<task>"` (task prompt goes last).
 
@@ -44,8 +44,8 @@ Put verification commands in `--test`, not in the task text (the wrapper runs it
 | `test_failure` | `--test` failed; **complete** error lines shown below summary (`  |`): full log if ≤60 lines, or all error blocks + file counts if longer | Automatically passed to next attempt; diagnose here on escalation |
 | `scope_violation` | Files changed outside `--scope` (`OUT-OF-SCOPE:` list) | Next attempt reverts these first |
 | `timeout` | Execution timed out (default 1200s, `-t`) | Split the task |
-| `quota` | Quota/rate limit; cooldown set for Gemini | Automatically falls back to Composer |
-| `auth_failure` / `cli_failure` | Missing login / CLI crash | Gemini automatically falls back to Composer; Composer exit 2 → run `{{AGENTS_HOME}}/doctor.sh` |
+| `quota` | Quota/rate limit; cooldown set for Gemini | Gemini: automatically goes to the fallback; fallback: escalates |
+| `auth_failure` / `cli_failure` | Missing login / CLI crash | Gemini automatically goes to the fallback; fallback exit 2 → run `{{AGENTS_HOME}}/doctor.sh` |
 
 `TESTS(wrapper): PASS` also displays counts (`40 passed, 2 skipped`); if you see **`NO TESTS RAN`**, exit 0 proves nothing.
 
@@ -70,10 +70,10 @@ Put verification commands in `--test`, not in the task text (the wrapper runs it
 
 ## Wrapper reference
 
-- `{{AGENTS_HOME}}/run-agent.sh <cursor|gemini> [-C DIR] [-m MODEL] [-t SEC] [--test CMD] [--scope LIST] [--isolate NAME] [--context TXT] [--ask] [--shell] "task"` — single attempt (`cursor.sh` / `gemini.sh` shortcuts).
+- `{{AGENTS_HOME}}/run-agent.sh <gemini|claude|cursor> [-C DIR] [-m MODEL] [-t SEC] [--test CMD] [--scope LIST] [--isolate NAME] [--context TXT] [--ask] [--shell] "task"` — single attempt (`gemini.sh` / `claude.sh` / `cursor.sh` shortcuts).
 - `{{AGENTS_HOME}}/doctor.sh` — environment, auth, and dependency check; displays tier models and active worktrees.
 - `{{AGENTS_HOME}}/watchdog.sh` — runs automatically on each execution: terminates stale foreground server/watch processes (>7m), logs STALL if no files change for 15m. Displayed in summary as `WATCHDOG:`.
 - `{{AGENTS_HOME}}/wt.sh ensure|diff|apply|discard|list` — isolated worktree management (`~/.local/state/ai-agents/worktrees/`).
-- Model configuration: `{{AGENTS_HOME}}/config.sh` or `~/.config/ai-agents/env` (`GEMINI_MODEL_SIMPLE|NORMAL|COMPLEX|IMAGE`, `CURSOR_MODEL`; list models via `agy models`, `agent --list-models`).
+- Model configuration: `{{AGENTS_HOME}}/config.sh` or `~/.config/ai-agents/env` (`FALLBACK_BACKEND=claude|cursor|none`, `CLAUDE_MODEL` (default `sonnet`), `GEMINI_MODEL_SIMPLE|NORMAL|COMPLEX|IMAGE`, `CURSOR_MODEL`; list models via `agy models`, `agent --list-models`).
 - Change tracking does not require git (shadow git: `~/.local/state/ai-agents/shadow/`); `.env`, images, `node_modules`, and `vendor` are ignored (`{{AGENTS_HOME}}/shadow-exclude`); new images appear on the `IMAGES:` line.
 - When modifying wrappers: run `bash {{AGENTS_HOME}}/tests/run.sh` (mock agents, offline).
