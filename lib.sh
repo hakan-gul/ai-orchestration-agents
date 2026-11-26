@@ -53,6 +53,8 @@ shadow_init() {  # sets SG for $WD
 }
 
 snapshot() {  # $1=message ; prints commit sha
+  # untrack paths that were added before they appeared in shadow-exclude
+  shadow_git ls-files -ci --exclude-standard -z 2>/dev/null | xargs -0 -r git --git-dir="$SG" --work-tree="$WD" rm -q --cached -- >/dev/null 2>&1
   shadow_git add -A . >/dev/null 2>&1
   shadow_git commit -q --allow-empty --no-verify -m "$1" >/dev/null 2>&1
   shadow_git rev-parse HEAD
