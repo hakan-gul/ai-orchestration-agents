@@ -10,6 +10,9 @@ export AI_AGENTS_STATE="$TMPDIR/state"
 export AI_AGENTS_STUB_BIN="$TMPDIR/bin"
 export CURSOR_MODEL=stub-composer
 export GEMINI_CLI=agy
+# Isolate from the machine's ~/.config/ai-agents/env (e.g. DISABLE_CURSOR=1)
+export HOME="$TMPDIR/home"
+mkdir -p "$HOME"
 
 mkdir -p "$AI_AGENTS_STATE" "$AI_AGENTS_STUB_BIN"
 cp "$D/tests/stubs/agy" "$AI_AGENTS_STUB_BIN/agy"
@@ -274,6 +277,32 @@ test_11() {
   return 0
 }
 
+# 12 DISABLE_CURSOR=1: quota -> escalate, never calls cursor
+test_12() {
+  local ws="$TMPDIR/ws12"
+  mkdir -p "$ws"
+  rm -f "$AI_AGENTS_STATE/gemini-cooldown"
+  local out rc
+  out="$(DISABLE_CURSOR=1 STUB_GEMINI=quota STUB_CURSOR=success "$D/delegate.sh" simple -C "$ws" "task 12" 2>&1)"
+  rc=$?
+  [ $rc -eq 3 ] || { echo "delegate exited $rc, expected 3 (output: $out)"; return 1; }
+  echo "$out" | grep -q "] cursor ===" && { echo "cursor was called although disabled: $out"; return 1; }
+  echo "$out" | grep -q "Cursor is disabled" || { echo "escalation reason missing: $out"; return 1; }
+  return 0
+}
+
+# 13 DISABLE_CURSOR=1: gemini failure -> gemini retry
+test_13() {
+  local ws="$TMPDIR/ws13"
+  mkdir -p "$ws"
+  rm -f "$AI_AGENTS_STATE/gemini-cooldown"
+  local out
+  out="$(DISABLE_CURSOR=1 STUB_GEMINI=fail STUB_CURSOR=success "$D/delegate.sh" simple -C "$ws" "task 13" 2>&1)"
+  echo "$out" | grep -q "simple retry\] gemini ===" || { echo "gemini retry header missing: $out"; return 1; }
+  echo "$out" | grep -q "] cursor ===" && { echo "cursor was called although disabled: $out"; return 1; }
+  return 0
+}
+
 run_test "1 gemini success" test_1
 run_test "2 gemini quota" test_2
 run_test "3 active cooldown" test_3
@@ -285,6 +314,8 @@ run_test "8 --isolate in a git repo" test_8
 run_test "9 wt.sh apply conflict" test_9
 run_test "10 testdigest.py" test_10
 run_test "11 lib.sh scope_violations" test_11
+run_test "12 DISABLE_CURSOR quota escalates" test_12
+run_test "13 DISABLE_CURSOR gemini retry" test_13
 
 echo "$PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ] || exit 1

@@ -9,6 +9,7 @@
 #   image                 : gemini only (Cursor cannot generate images): gemini -> gemini retry -> ESCALATE
 #   complex               : adds a plan-first instruction
 #   --backend cursor      : start on Cursor (skip Gemini) for a task you know Gemini handles badly
+#   DISABLE_CURSOR=1      : never use Cursor; gemini -> gemini retry -> ESCALATE (set in ~/.config/ai-agents/env)
 #   --isolate [NAME]      : run in git worktree NAME (default: generated) — all attempts share it; apply with wt.sh
 # Exit: 0 success | 3 escalate to the orchestrator | 2 usage/infra error
 D="$(cd "$(dirname "$0")" && pwd)"
@@ -98,6 +99,16 @@ if [ "$LEVEL" = image ]; then
   gemini_down && escalate "gemini unavailable ($OC); cursor cannot generate images"
   attempt gemini "image retry" --context "$(ctx)" && done_ok
   escalate "image generation failed twice"
+fi
+
+# ---- code: gemini only (Cursor disabled via DISABLE_CURSOR=1) ----
+if [ "${DISABLE_CURSOR:-0}" = 1 ]; then
+  [ "$START_BACKEND" = cursor ] && echo "=== Cursor is disabled (DISABLE_CURSOR=1) -> using gemini ==="
+  gemini_ok || escalate "gemini in cooldown ($(cooldown_note)) and Cursor is disabled"
+  attempt gemini "$LEVEL" && done_ok
+  gemini_down && escalate "gemini unavailable ($OC) and Cursor is disabled"
+  attempt gemini "$LEVEL retry" --context "$(ctx)" && done_ok
+  escalate "gemini failed twice (Cursor disabled); last outcome: $OC"
 fi
 
 # ---- code: gemini first, cursor fallback ----
