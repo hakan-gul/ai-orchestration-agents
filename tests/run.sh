@@ -356,6 +356,21 @@ test_17() {
   return 0
 }
 
+# 18 caller env beats ~/.config/ai-agents/env (FALLBACK_BACKEND=none must not fall back to claude)
+test_18() {
+  local ws="$TMPDIR/ws18"; mkdir -p "$ws" "$HOME/.config/ai-agents"
+  rm -f "$AI_AGENTS_STATE/gemini-cooldown" "$AI_AGENTS_STATE/claude-cooldown"
+  echo "FALLBACK_BACKEND=claude" > "$HOME/.config/ai-agents/env"
+  local out rc
+  out="$(FALLBACK_BACKEND=none STUB_GEMINI=quota STUB_CLAUDE=success "$D/delegate.sh" simple -C "$ws" "task 18" 2>&1)"; rc=$?
+  out2="$(STUB_GEMINI=quota STUB_CLAUDE=success "$D/delegate.sh" simple -C "$ws" "task 18b" 2>&1)"
+  rm -f "$HOME/.config/ai-agents/env" "$AI_AGENTS_STATE/gemini-cooldown"
+  [ $rc -eq 3 ] || { echo "caller FALLBACK_BACKEND=none ignored (rc=$rc): $out"; return 1; }
+  echo "$out" | grep -q "claude ===" && { echo "claude called despite FALLBACK_BACKEND=none: $out"; return 1; }
+  echo "$out2" | grep -q "via claude\] claude ===" || { echo "env file value not used when caller unset: $out2"; return 1; }
+  return 0
+}
+
 run_test "1 gemini success" test_1
 run_test "2 gemini quota" test_2
 run_test "3 active cooldown" test_3
@@ -373,6 +388,7 @@ run_test "14 claude fallback on gemini quota" test_14
 run_test "15 claude quota escalates" test_15
 run_test "16 claude fallback on failure / --backend cursor" test_16
 run_test "17 no nested orchestration" test_17
+run_test "18 caller env beats env file" test_18
 
 echo "$PASSED passed, $FAILED failed"
 [ "$FAILED" -eq 0 ] || exit 1

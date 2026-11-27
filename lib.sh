@@ -16,8 +16,16 @@ fi
 # self-tests put stub `agent` / `agy` binaries first (tests/run.sh)
 [ -n "${AI_AGENTS_STUB_BIN:-}" ] && export PATH="$AI_AGENTS_STUB_BIN:$PATH"
 
-# Secrets / overrides (GEMINI_API_KEY, CURSOR_API_KEY, CURSOR_MODEL, GEMINI_MODEL)
-[ -f "$HOME/.config/ai-agents/env" ] && set -a && . "$HOME/.config/ai-agents/env" && set +a
+# Secrets / overrides (GEMINI_API_KEY, CURSOR_API_KEY, CURSOR_MODEL, GEMINI_MODEL, FALLBACK_BACKEND, …).
+# A variable the caller already set wins: "FALLBACK_BACKEND=none delegate.sh …" must not be overridden by the file.
+_AIA_ENV="$HOME/.config/ai-agents/env"
+if [ -f "$_AIA_ENV" ]; then
+  _keep=()
+  while IFS= read -r _n; do [ -n "${!_n+x}" ] && _keep+=("$_n=${!_n}"); done \
+    < <(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' "$_AIA_ENV")
+  set -a; . "$_AIA_ENV"; set +a
+  for _kv in "${_keep[@]}"; do export "$_kv"; done
+fi
 [ -f "$AGENTS_HOME/config.sh" ] && . "$AGENTS_HOME/config.sh"
 
 die() { echo "ERROR: $*" >&2; exit 2; }
